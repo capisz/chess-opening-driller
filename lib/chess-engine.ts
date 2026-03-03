@@ -126,6 +126,15 @@ export class ChessGame {
     return this.moveHistory[this.moveHistory.length - 1]?.notation || ""
   }
 
+  getLastMove(): Move | null {
+    const lastMove = this.moveHistory[this.moveHistory.length - 1]
+    return lastMove ? { ...lastMove } : null
+  }
+
+  getMoveCount(): number {
+    return this.moveHistory.length
+  }
+
   private generateMoveNotation(from: string, to: string, piece: ChessPiece, captured?: ChessPiece): string {
     if (!piece) return ""
 
