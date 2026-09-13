@@ -53,6 +53,19 @@ Edit anything under `src/`, then:
 
     node tools/build.js
 
+## Deploying
+
+It is a static file — no framework, no build step, no dependencies. Any host
+that serves a directory will do.
+
+GitHub Pages needs no configuration: Settings -> Pages -> deploy from `main`,
+root folder.
+
+Vercel will try to guess a framework and fail, so `vercel.json` tells it there
+isn't one. If a project was already imported as Next.js, fix it in Project
+Settings -> Build & Development Settings: Framework Preset `Other`, empty build
+command, output directory `.` — dashboard settings win over the file.
+
 ## Tests
 
     node tools/engine-test.js   # move generation and PGN parsing
