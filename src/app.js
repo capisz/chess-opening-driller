@@ -265,7 +265,7 @@
 
   function arrowsSvg() {
     if (!run || !run.arrows.length) return '';
-    const col = { rust: '#C8553D', brass: '#E0A94A' };
+    const col = { rust: 'no', brass: 'ok' };   // styled from the theme, see .arrows in CSS
     const body = run.arrows.map((a) => {
       const [x1, y1] = sqPoint(a.from), [x2, y2] = sqPoint(a.to);
       const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
@@ -274,10 +274,10 @@
       const hx = x2 - ux * 0.34, hy = y2 - uy * 0.34;
       const tx = x2 - ux * 0.04, ty = y2 - uy * 0.04;
       const c = col[a.color];
-      return '<line x1="' + bx + '" y1="' + by + '" x2="' + hx + '" y2="' + hy + '" stroke="' + c +
-        '" stroke-width="0.13" stroke-linecap="round" opacity="0.95"/><polygon points="' + tx + ',' + ty + ' ' +
-        (hx + px * w) + ',' + (hy + py * w) + ' ' + (hx - px * w) + ',' + (hy - py * w) +
-        '" fill="' + c + '" opacity="0.95"/>';
+      return '<line class="' + c + '" x1="' + bx + '" y1="' + by + '" x2="' + hx + '" y2="' + hy +
+        '" stroke-width="0.13" stroke-linecap="round" opacity="0.95"/><polygon class="' + c +
+        '" points="' + tx + ',' + ty + ' ' + (hx + px * w) + ',' + (hy + py * w) + ' ' +
+        (hx - px * w) + ',' + (hy - py * w) + '" opacity="0.95"/>';
     }).join('');
     return '<svg class="arrows" viewBox="0 0 8 8">' + body + '</svg>';
   }
