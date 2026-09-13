@@ -278,7 +278,7 @@
 
   /* ---------- PGN ---------- */
 
-  const TOKEN_RE = /(\[[^\]\n]*\])|(\{[^}]*\})|(;[^\n]*)|(\()|(\))|(\$\d+)|(1-0|0-1|1\/2-1\/2|\*)|(\d+)\s*\.(?:\s*\.\.)?|([KQRBNOo0][^\s()\[\]{};$]*|[a-h][^\s()\[\]{};$]*)/g;
+  const TOKEN_RE = /(\[[^\]\n]*\])|(\{[^}]*\})|(;[^\n]*)|(\()|(\))|(\$\d+)|(1-0|0-1|1\/2-1\/2|\*)|(\d+)\s*(\.\s*\.\s*\.|\.\.\.|\.)|([KQRBNOo0][^\s()\[\]{};$]*|[a-h][^\s()\[\]{};$]*)/g;
 
   function tokenize(text) {
     const toks = [];
@@ -294,8 +294,8 @@
       else if (m[5]) toks.push({ t: 'close' });
       else if (m[6]) toks.push({ t: 'nag', v: m[6] });
       else if (m[7]) toks.push({ t: 'result', v: m[7] });
-      else if (m[8]) toks.push({ t: 'num', v: parseInt(m[8], 10) });
-      else if (m[9]) toks.push({ t: 'san', v: m[9] });
+      else if (m[8]) toks.push({ t: 'num', v: parseInt(m[8], 10), black: m[9].replace(/\s/g, '').length > 1 });
+      else if (m[10]) toks.push({ t: 'san', v: m[10] });
     }
     return toks;
   }
@@ -352,8 +352,9 @@
       }
       if (tk.t === 'nag') continue;
       if (tk.t === 'num') {
-        // "1." at the top level means another line is starting from the root
-        if (tk.v === 1 && stack.length === 0 && cur !== root) { cur = root; dead = -1; }
+        // "1." at the top level means another line is starting from the root.
+        // "1..." does not — it is the main line resuming after a variation.
+        if (tk.v === 1 && !tk.black && stack.length === 0 && cur !== root) { cur = root; dead = -1; }
         continue;
       }
       if (tk.t === 'comment') { if (cur && cur !== root && !cur.comment) cur.comment = tk.v; continue; }
@@ -552,6 +553,17 @@
     const minGames = opts.minGames || 8;
     const topReplies = opts.topReplies || 3;
     const stopAt = opts.stopAt || 0.04; // ignore replies under this share of the position
+    const byScore = opts.pick === 'score';
+    const minPick = opts.minPick || 25;  // a move needs this many games before its score counts
+    const SHRINK = 25;                   // pulls small samples back toward an even score
+
+    // How well a move does for the side we are building the repertoire for,
+    // shrunk toward 50% so a 5-game 80% flash does not beat a 500-game 58%.
+    const value = (k) => {
+      const raw = k.sc / k.n;
+      const mine = color === 'w' ? raw : 1 - raw;
+      return (mine * k.n + 0.5 * SHRINK) / (k.n + SHRINK);
+    };
 
     const out = { san: null, children: [], n: tally.root.n, sc: tally.root.sc };
     const walk = (src, dst, state, ply) => {
@@ -561,7 +573,15 @@
       const mine = state.turn === color;
       let keep;
       if (mine) {
-        keep = [kids[0]];
+        if (byScore) {
+          // Only moves that are genuinely played here are candidates, so score
+          // cannot drag the repertoire into a rare move order. Among those, take
+          // the one that scores best for our side.
+          const floor = Math.max(minPick, kids[0].n * (opts.share || 0.25));
+          const tried = kids.filter((k) => k.n >= floor);
+          keep = [(tried.length ? tried : [kids[0]]).slice()
+            .sort((a, b) => value(b) - value(a) || b.n - a.n)[0]];
+        } else keep = [kids[0]];
       } else {
         keep = kids.filter((k) => k.n >= minGames && k.n / src.n >= stopAt).slice(0, topReplies);
         if (!keep.length) return;

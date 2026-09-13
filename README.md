@@ -29,16 +29,31 @@ defender. That keeps its own separate set of records.
 Four repertoires are built in and drillable from the landing page, each one
 compiled from a game database rather than hand-written:
 
-| Repertoire            | Side  | Lines | Built from |
-|-----------------------|-------|-------|-----------|
-| Giuoco Piano          | White | 42    | 20,949 games, 2400+ |
-| Ruy Lopez sidelines   | White | 50    | 5,977 games, 2400+ |
-| Bogo-Indian, 4.Bd2    | White | 58    | 11,865 games, 2400+ |
-| Nimzo-Indian          | Black | 19    | 1,604 games of Miguel Najdorf |
+Eighteen repertoires ship built in, thirteen for White and five for Black,
+each compiled from a game database rather than written by hand. They live in
+`src/presets.json` and are inlined into `index.html` at build time.
 
-All four are cut at 12 moves. They live in `src/presets.json` and are inlined
-into `index.html` at build time. To swap or add one, build a tree with the
-importer in the running app, export the PGN, and drop it into that file.
+Your move at each turn is chosen by result, not popularity: candidates must be
+genuinely played in the position (at least 25 games and a quarter of the most
+played move's count), and among those the one scoring best for your side wins.
+Scores are shrunk toward 50% so a 30-game 70% does not outrank a 600-game 58%.
+
+Every position also carries a Stockfish evaluation, which drives the bar beside
+the board. These are computed once, offline, and stored as plain numbers -- no
+engine ships with the app, so nothing here is bound by Stockfish's GPL.
+
+### Rebuilding the presets
+
+    node tools/presets/build-trees.js        # databases -> repertoire trees
+    node tools/presets/evaluate.js           # Stockfish over every position, resumable
+    node tools/presets/evaluate-roots.js     # the starting position
+    node tools/presets/prune-bad-lines.js    # drop lines that lose for your side
+
+`evaluate.js` needs `npm install stockfish` and caches results in
+`build/evalcache.json`, so it can be stopped and restarted freely. The pruning
+cutoff is measured against each repertoire's own starting evaluation, because a
+Black repertoire sits near -0.4 by nature and a fixed threshold would delete
+every one of them.
 
 ## Loading a repertoire
 

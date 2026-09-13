@@ -78,9 +78,41 @@
       });
     });
     R = { rep, roots: parsed.roots, lines, errors: parsed.errors, positions: C.countPositions(parsed.roots) };
+    attachEvals(rep, parsed.roots);
     db.active = id; save();
     ses = null;               // a new repertoire starts on its own side
     startSession('learn');
+  }
+
+  // Preset repertoires ship with a Stockfish evaluation per position, in the
+  // same depth-first order the tree is walked here.
+  function attachEvals(rep, roots) {
+    R.ev0 = null;
+    if (!rep.preset) return;
+    const p = PRESETS.filter((x) => x.id === rep.preset)[0];
+    if (!p || !p.ev || !p.ev.length) return;
+    let i = 0;
+    const go = (n) => { for (const c of n.children) { c.ev = p.ev[i++]; go(c); } };
+    roots.forEach((r) => go(r.node));
+    if (i === p.ev.length) R.ev0 = p.ev0;
+  }
+
+  function renderEval() {
+    const col = $('#evalcol'), bar = $('#evalbar'), num = $('#evnum');
+    if (!col || !bar || !bar.firstChild) return;
+    const vp = run ? shownPly() : 0;
+    const node = run && vp > 0 ? run.line.nodes[vp - 1] : null;
+    let cp = node ? node.ev : (R ? R.ev0 : null);
+    if (cp === undefined || cp === null) { col.style.visibility = 'hidden'; return; }
+    col.style.visibility = 'visible';
+    const pct = Math.max(2, Math.min(98, 50 + 50 * Math.tanh(cp / 320)));
+    const flip = userColor() === 'b';
+    const fill = bar.firstChild;
+    fill.style.height = pct + '%';
+    fill.style.top = flip ? '0' : 'auto';
+    fill.style.bottom = flip ? 'auto' : '0';
+    num.textContent = (cp > 0 ? '+' : cp < 0 ? '\u2212' : '') + (Math.abs(cp) / 100).toFixed(1);
+    bar.title = 'Stockfish depth 12: ' + (cp > 0 ? '+' : '') + (cp / 100).toFixed(2) + ' for White';
   }
 
   function stats() {
@@ -122,7 +154,7 @@
     run = {
       i, line: R.lines[i], phase, failures: failures || 0,
       ply: 0, state: C.parseFen(R.lines[i].fen),
-      await: false, lock: false, done: false, needRestart: false, hint: 0,
+      await: false, lock: false, done: false, needRestart: false, hint: 0, view: null,
       last: null, anim: null, arrows: [], badSq: null, msg: '', msgKind: ''
     };
     sel = null;
@@ -145,7 +177,27 @@
     } else { run.await = true; run.lock = false; render(); }
   }
 
+  // While reviewing, the board shows an earlier position. The drill itself is
+  // untouched: run.ply, the phase and the scheduling all stay where they were.
+  function replayTo(ply) {
+    let s = C.parseFen(run.line.fen);
+    for (let j = 0; j < ply; j++) s = C.makeMove(s, run.line.nodes[j].move);
+    return s;
+  }
+  const shownPly = () => (run.view == null ? run.ply : run.view);
+  const shownState = () => (run.view == null ? run.state : replayTo(run.view));
+
+  function review(ply) {
+    if (!run) return;
+    const max = run.done ? run.line.nodes.length : run.ply;
+    ply = Math.max(0, Math.min(max, ply));
+    run.view = ply === run.ply ? null : ply;
+    sel = null;
+    render();
+  }
+
   function play(node) {
+    run.view = null;
     run.anim = { from: node.move.from, to: node.move.to };
     run.state = C.makeMove(run.state, node.move);
     run.last = { from: node.move.from, to: node.move.to };
@@ -316,8 +368,12 @@
   function paint() {
     if (!run) return;
     if (!cells.length || boardFlip !== (userColor() === 'b')) buildBoard();
-    const st = run.state;
-    const tgt = sel != null ? C.genMoves(st).filter((m) => m.from === sel).map((m) => m.to) : [];
+    const st = shownState();
+    const vp = shownPly();
+    const lastNode = vp > 0 ? run.line.nodes[vp - 1] : null;
+    const last = run.view == null ? run.last
+      : (lastNode ? { from: lastNode.move.from, to: lastNode.move.to } : null);
+    const tgt = sel != null && run.view == null ? C.genMoves(st).filter((m) => m.from === sel).map((m) => m.to) : [];
     const kingSq = C.inCheck(st) ? C.kingSquare(st.board, st.turn) : -1;
     for (let i = 0; i < 64; i++) {
       const cell = cells[i];
@@ -332,16 +388,16 @@
         } else pcs[i].classList.add('off');
       }
       const cl = cell.classList, isT = tgt.indexOf(i) >= 0;
-      cl.toggle('last', !!(run.last && (run.last.from === i || run.last.to === i)));
+      cl.toggle('last', !!(last && (last.from === i || last.to === i)));
       cl.toggle('sel', sel === i);
       cl.toggle('bad', run.badSq === i);
       cl.toggle('chk', kingSq === i);
       cl.toggle('tgt', isT);
       cl.toggle('occ', isT && !!p);
-      cl.toggle('mine', !!p && C.colorOf(p) === userColor() && !!run.await);
+      cl.toggle('mine', !!p && C.colorOf(p) === userColor() && !!run.await && run.view == null);
       if (sel !== i && pcs[i].classList.contains('lift')) pcs[i].classList.remove('lift');
     }
-    const svg = arrowsSvg();
+    const svg = run.view == null ? arrowsSvg() : '';
     let ov = boardEl.querySelector('.arrows');
     if (svg) { if (ov) ov.outerHTML = svg; else boardEl.insertAdjacentHTML('beforeend', svg); }
     else if (ov && ov.remove) ov.remove();
@@ -409,7 +465,9 @@
       if (col === 0) html += '<span class="n">' + num + '</span>';
       const mine = n.side === userColor();
       let cell;
-      if (j < run.ply || run.done) cell = '<span class="c ' + (mine ? 'mine' : 'theirs') + '">' + n.san + '</span>';
+      const seenAlready = j < run.ply || run.done;
+      if (seenAlready) cell = '<button class="c go ' + (mine ? 'mine' : 'theirs') +
+        (shownPly() === j + 1 ? ' at' : '') + '" data-ply="' + (j + 1) + '">' + n.san + '</button>';
       else if (j === run.ply) {
         const shown = (run.phase === 'teach' && run.hint >= 1) ? n.san : '\u00b7 \u00b7 \u00b7';
         cell = '<span class="c now">' + shown + '</span>';
@@ -420,6 +478,9 @@
     });
     if (col === 1) html += '<span class="c"></span>';
     box.innerHTML = html;
+    box.querySelectorAll('[data-ply]').forEach((b) => {
+      b.onclick = () => review(+b.dataset.ply);
+    });
     const now = box.querySelector('.now');
     if (now && now.offsetTop !== undefined) box.scrollTop = Math.max(0, now.offsetTop - 90);
   }
@@ -461,6 +522,8 @@
     note.textContent = comment;
 
     if (!run) say.textContent = '';
+    else if (run.view != null) say.innerHTML = 'Looking back at move ' +
+      Math.ceil(shownPly() / 2) + '. <span class="soft">Click the board to return.</span>';
     else if (run.done) say.textContent = run.phase === 'teach'
       ? 'That is the full line.' : 'Line complete.';
     else if (run.lock) say.innerHTML = '<span class="soft">' +
@@ -476,14 +539,15 @@
     fb.innerHTML = run ? run.msg : '';
 
     const btns = [];
-    if (run && run.done && run.phase === 'teach') btns.push(['primary', 'Play it from memory', () => startRun(run.i, 'recall', 0)]);
+    if (run && run.view != null) btns.push(['primary', 'Back to the position', () => review(run.ply)]);
+    else if (run && run.done && run.phase === 'teach') btns.push(['primary', 'Play it from memory', () => startRun(run.i, 'recall', 0)]);
     else if (run && run.done) btns.push(['primary', ses.single ? 'Back to lines' : 'Next line', () => (ses.single ? showLines() : nextLine())]);
     else if (run && run.needRestart) btns.push(['primary', 'Run it again', () => startRun(run.i, 'recall', run.failures)]);
     else if (run) {
       btns.push(['', run.hint >= 2 ? 'Hint shown' : 'Hint', hint, run.phase === 'teach' || run.hint >= 2]);
       btns.push(['', 'Restart line', () => startRun(run.i, run.phase, run.failures)]);
     }
-    if (run && !run.done) btns.push(['quiet', 'Skip', () => (ses.single ? showLines() : nextLine())]);
+    if (run && !run.done && run.view == null) btns.push(['quiet', 'Skip', () => (ses.single ? showLines() : nextLine())]);
     acts.innerHTML = '';
     btns.forEach((b) => {
       const el = document.createElement('button');
@@ -512,7 +576,7 @@
     } else pips.innerHTML = '';
   }
 
-  function render() { paint(); renderSheet(); renderPanel(); renderStrip(); renderCount(); }
+  function render() { paint(); renderSheet(); renderPanel(); renderStrip(); renderCount(); renderEval(); }
 
   function hint() {
     if (!run || run.done) return;
@@ -691,7 +755,16 @@
 
   function presetCards() {
     if (!PRESETS.length) return '';
-    return '<p class="sec">Ready to drill</p><div class="cards">' + PRESETS.map((p) => {
+    return ['w', 'b'].map((side) => {
+      const group = PRESETS.filter((p) => p.color === side);
+      if (!group.length) return '';
+      return '<p class="sec">' + (side === 'w' ? 'Play as White' : 'Play as Black') +
+        ' \u00b7 ' + group.length + ' repertoires</p><div class="cards">' + cardsFor(group) + '</div>';
+    }).join('');
+  }
+
+  function cardsFor(list) {
+    return list.map((p) => {
       const rep = presetRep(p.id);
       let mastered = 0, seen = 0, total = p.lines;
       if (rep) {
@@ -706,14 +779,14 @@
       return '<button class="oc" data-preset="' + p.id + '">' +
         '<span class="mini">' + previewBoard(p) + '</span>' +
         '<span class="oc-body"><h3>' + esc(p.name) + '</h3><p>' + esc(p.blurb) + '</p>' +
-        '<span class="oc-side">' + (p.color === 'w' ? 'You play White' : 'You play Black') + '</span>' +
+        '<span class="oc-side">' + p.games.toLocaleString() + ' master games</span>' +
         '<span class="oc-foot"><span class="oc-n">' + (rep && seen ? mastered + ' of ' + total + ' mastered'
           : total + ' lines total') + '</span>' +
         '<span class="oc-bar"><i class="m" style="width:' + mp + '%"></i>' +
         '<i class="s" style="width:' + sp + '%"></i></span>' +
         '<span class="oc-cta">' + (rep && seen ? 'Keep going' : 'Try the first line') + ' \u2192</span>' +
         '</span></span></button>';
-    }).join('') + '</div>';
+    }).join('');
   }
 
   function renderLibrary() {
@@ -951,6 +1024,7 @@
 
   boardEl.addEventListener('pointerdown', (e) => {
     if (drag) { drag.ghost.remove(); drag = null; boardEl.classList.remove('dragging'); }
+    if (run && run.view != null) { review(run.ply); return; }
     if (!run || run.lock || !run.await) return;
     const cell = e.target.closest ? e.target.closest('.sq') : null;
     if (!cell) return;
@@ -1002,7 +1076,9 @@
 
   document.addEventListener('keydown', (e) => {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-    if (e.key === 'Enter') { const b = $('#acts .primary'); if (b) { e.preventDefault(); b.click(); } }
+    if (e.key === 'ArrowLeft' && run) { e.preventDefault(); review(shownPly() - 1); }
+    else if (e.key === 'ArrowRight' && run) { e.preventDefault(); review(shownPly() + 1); }
+    else if (e.key === 'Enter') { const b = $('#acts .primary'); if (b) { e.preventDefault(); b.click(); } }
     else if (e.key === 'h' && run && !run.done) { e.preventDefault(); hint(); }
     else if (e.key === 'r' && run) { e.preventDefault(); startRun(run.i, run.phase, run.failures); }
   });
