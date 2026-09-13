@@ -5,6 +5,7 @@
   const $ = (s, r) => (r || document).querySelector(s);
   const KEY = 'odrill.v2';
   const SPRITE = {};/*SPRITE*/
+  const PRESETS = [];/*PRESETS*/
   (function () {
     let s = '';
     for (const k in SPRITE) s += '<symbol id="p-' + k + '" viewBox="' + SPRITE[k].vb + '">' + SPRITE[k].body + '</symbol>';
@@ -651,11 +652,75 @@
   }
 
   /* ---------- library + import ---------- */
+  // the position a few moves into a preset's main line, for the card preview
+  const previewCache = {};
+  function previewBoard(p) {
+    if (previewCache[p.id]) return previewCache[p.id];
+    let html = '';
+    try {
+      const roots = C.parsePgn(p.pgn).roots;
+      let node = roots[0].node;
+      for (let k = 0; k < 8 && node.children.length; k++) node = node.children[0];
+      const b = node.state.board;
+      for (let i = 0; i < 64; i++) {
+        const r = i >> 3, c = i & 7, pc = b[i];
+        html += '<i class="' + ((r + c) % 2 ? 'd' : '') + '">' +
+          (pc ? '<svg viewBox="0 0 100 100"><use width="100" height="100" href="' + pieceId(pc) +
+            '" xlink:href="' + pieceId(pc) + '"/></svg>' : '') + '</i>';
+      }
+    } catch (e) { html = ''; }
+    previewCache[p.id] = html;
+    return html;
+  }
+
+  const presetRep = (id) => db.reps.filter((r) => r.preset === id)[0];
+
+  function openPreset(id) {
+    const existing = presetRep(id);
+    if (existing) return openRep(existing.id);
+    const p = PRESETS.filter((x) => x.id === id)[0];
+    if (!p) return;
+    const rep = {
+      id: 'r' + Date.now().toString(36), name: p.name, color: p.color,
+      pgn: p.pgn, created: Date.now(), preset: p.id
+    };
+    db.reps.push(rep); save();
+    ses = null;
+    openRep(rep.id);
+  }
+
+  function presetCards() {
+    if (!PRESETS.length) return '';
+    return '<p class="sec">Ready to drill</p><div class="cards">' + PRESETS.map((p) => {
+      const rep = presetRep(p.id);
+      let mastered = 0, seen = 0, total = p.lines;
+      if (rep) {
+        const pr = db.progress[rep.id] || {};
+        Object.keys(pr).forEach((k) => {
+          if (k.indexOf('x|') === 0 || !pr[k].d) return;
+          seen++; if (pr[k].s >= target()) mastered++;
+        });
+      }
+      const mp = total ? (mastered / total) * 100 : 0;
+      const sp = total ? ((seen - mastered) / total) * 100 : 0;
+      return '<button class="oc" data-preset="' + p.id + '">' +
+        '<span class="mini">' + previewBoard(p) + '</span>' +
+        '<span class="oc-body"><h3>' + esc(p.name) + '</h3><p>' + esc(p.blurb) + '</p>' +
+        '<span class="oc-side">' + (p.color === 'w' ? 'You play White' : 'You play Black') + '</span>' +
+        '<span class="oc-foot"><span class="oc-n">' + (rep && seen ? mastered + ' of ' + total + ' mastered'
+          : total + ' lines total') + '</span>' +
+        '<span class="oc-bar"><i class="m" style="width:' + mp + '%"></i>' +
+        '<i class="s" style="width:' + sp + '%"></i></span>' +
+        '<span class="oc-cta">' + (rep && seen ? 'Keep going' : 'Try the first line') + ' \u2192</span>' +
+        '</span></span></button>';
+    }).join('') + '</div>';
+  }
+
   function renderLibrary() {
     const v = $('#viewLibrary');
     let reps = '';
     if (db.reps.length) {
-      reps = '<div class="reps">' + db.reps.map((rep) => {
+      reps = '<p class="sec">Your repertoires</p><div class="reps">' + db.reps.map((rep) => {
         const parsed = C.parsePgn(rep.pgn);
         const lines = C.enumerateLines(parsed.roots).filter((l) =>
           l.nodes.some((n) => C.colorOf(n.move.piece) === rep.color));
@@ -674,9 +739,11 @@
       }).join('') + '</div>';
     }
     v.innerHTML = '<div class="lede"><h1>Drill your openings until the moves are automatic.</h1>' +
-      '<p>Load a repertoire and every branch becomes a line you play move by move. A line only makes way ' +
-      'for the next one once you have played it back from memory with no prompts.</p></div>' + reps +
-      '<div class="form"><h2>' + (db.reps.length ? 'Add another repertoire' : 'Load your first repertoire') + '</h2>' +
+      '<p>Every branch of a repertoire becomes a line you play move by move. A line only makes way ' +
+      'for the next one once you have played it back from memory with no prompts.</p></div>' +
+      presetCards() + reps +
+      '<div class="form"><p class="sec">Your own PGN</p><h2>' +
+      (db.reps.length ? 'Add another repertoire' : 'Load a repertoire') + '</h2>' +
       '<div class="row"><div class="field"><label for="fName">Name</label>' +
       '<input id="fName" type="text" placeholder="White \u2014 London System"></div>' +
       '<div class="field" style="max-width:170px"><label for="fSide">You play</label>' +
@@ -690,6 +757,7 @@
       '<p class="hint">A repertoire PGN with variations in brackets works directly. A collection of whole ' +
       'games gets turned into a repertoire tree.</p></div><div id="importState"></div></div>';
 
+    v.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => openPreset(b.dataset.preset); });
     v.querySelectorAll('[data-open]').forEach((b) => { b.onclick = () => openRep(b.dataset.open); });
     v.querySelectorAll('[data-del]').forEach((b) => {
       b.onclick = () => {

@@ -17,14 +17,19 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const shell = read('src/shell.html');
 const engine = read('src/engine.js');
 const sprite = read('src/pieces.sprite.json').trim();
+const presets = read('src/presets.json').trim();
 let app = read('src/app.js');
 
-const marker = 'const SPRITE = {};/*SPRITE*/';
-if (app.indexOf(marker) < 0) {
-  console.error('src/app.js is missing the sprite placeholder: ' + marker);
-  process.exit(1);
+for (const [marker, value] of [
+  ['const SPRITE = {};/*SPRITE*/', 'const SPRITE = ' + sprite + ';'],
+  ['const PRESETS = [];/*PRESETS*/', 'const PRESETS = ' + presets + ';']
+]) {
+  if (app.indexOf(marker) < 0) {
+    console.error('src/app.js is missing a placeholder: ' + marker);
+    process.exit(1);
+  }
+  app = app.replace(marker, value);
 }
-app = app.replace(marker, 'const SPRITE = ' + sprite + ';');
 
 const out = shell + engine + app + '</script>\n</body>\n</html>\n';
 fs.writeFileSync(path.join(root, 'index.html'), out);

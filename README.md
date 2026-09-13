@@ -24,6 +24,22 @@ The Practice tab opens on whatever is due, most overdue first.
 You can also flip to the other side of the same tree and drill it as the
 defender. That keeps its own separate set of records.
 
+## What ships with it
+
+Four repertoires are built in and drillable from the landing page, each one
+compiled from a game database rather than hand-written:
+
+| Repertoire            | Side  | Lines | Built from |
+|-----------------------|-------|-------|-----------|
+| Giuoco Piano          | White | 42    | 20,949 games, 2400+ |
+| Ruy Lopez sidelines   | White | 50    | 5,977 games, 2400+ |
+| Bogo-Indian, 4.Bd2    | White | 58    | 11,865 games, 2400+ |
+| Nimzo-Indian          | Black | 19    | 1,604 games of Miguel Najdorf |
+
+All four are cut at 12 moves. They live in `src/presets.json` and are inlined
+into `index.html` at build time. To swap or add one, build a tree with the
+importer in the running app, export the PGN, and drop it into that file.
+
 ## Loading a repertoire
 
 Two kinds of PGN work:
