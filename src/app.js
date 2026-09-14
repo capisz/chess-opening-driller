@@ -49,6 +49,19 @@
     });
     return { due, next: next === Infinity ? 0 : next };
   }
+  function agoText(ts) {
+    const ms = Date.now() - ts;
+    if (ms < 90000) return 'just now';
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return mins + ' min ago';
+    const h = Math.round(ms / 3600000);
+    if (h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+    const d = Math.round(ms / 86400000);
+    if (d === 1) return 'yesterday';
+    if (d < 30) return d + ' days ago';
+    const mo = Math.round(d / 30);
+    return mo + (mo === 1 ? ' month ago' : ' months ago');
+  }
   function untilText(ts) {
     const ms = ts - Date.now();
     if (ms <= 0) return 'now';
@@ -103,8 +116,12 @@
     const vp = run ? shownPly() : 0;
     const node = run && vp > 0 ? run.line.nodes[vp - 1] : null;
     let cp = node ? node.ev : (R ? R.ev0 : null);
-    if (cp === undefined || cp === null) { col.style.visibility = 'hidden'; return; }
+    if (cp === undefined || cp === null) {
+      col.style.visibility = 'hidden'; if (num.style) num.style.visibility = 'hidden';
+      return;
+    }
     col.style.visibility = 'visible';
+    if (num.style) num.style.visibility = 'visible';
     const pct = Math.max(2, Math.min(98, 50 + 50 * Math.tanh(cp / 320)));
     const flip = userColor() === 'b';
     const fill = bar.firstChild;
@@ -155,7 +172,7 @@
       i, line: R.lines[i], phase, failures: failures || 0,
       ply: 0, state: C.parseFen(R.lines[i].fen),
       await: false, lock: false, done: false, needRestart: false, hint: 0, view: null,
-      last: null, anim: null, arrows: [], badSq: null, msg: '', msgKind: ''
+      last: null, anim: null, arrows: [], badSq: null, badSan: '', msg: '', msgKind: ''
     };
     sel = null;
     render();
@@ -214,7 +231,7 @@
     const san = C.sanOf(run.state, mv);
     sel = null;
     if (san === node.san) {
-      run.await = false; run.hint = 0; run.arrows = []; run.badSq = null;
+      run.await = false; run.hint = 0; run.arrows = []; run.badSq = null; run.badSan = '';
       run.msg = ''; run.msgKind = '';
       play(node); render();
       step();
@@ -224,6 +241,7 @@
   function wrong(mv, san, node) {
     run.await = false;
     run.badSq = mv.to;
+    run.badSan = san;
     run.arrows = [{ from: mv.from, to: mv.to, color: 'rust' }];
     const sib = (node.parent && node.parent.children || []).find((c) => c.san === san && c !== node);
     const msg = sib
@@ -237,7 +255,8 @@
       const mine = run;
       setTimeout(() => {
         if (run !== mine || run.done) return;
-        run.badSq = null;
+        run.badSq = null; run.badSan = '';
+        run.msg = ''; run.msgKind = '';
         run.arrows = run.arrows.filter((a) => a.color === 'brass');
         run.await = true; render();
       }, 900);
@@ -460,23 +479,23 @@
     const nodes = run.line.nodes;
     const start = C.parseFen(run.line.fen);
     let num = start.full, html = '', col = start.turn === 'b' ? 1 : 0;
-    if (col === 1) html += '<span class="n">' + num + '</span><span class="c"></span>';
+    if (col === 1) html += '<span class="n">' + num + '</span><span class="c pad"></span>';
     nodes.forEach((n, j) => {
       if (col === 0) html += '<span class="n">' + num + '</span>';
       const mine = n.side === userColor();
       let cell;
       const seenAlready = j < run.ply || run.done;
-      if (seenAlready) cell = '<button class="c go ' + (mine ? 'mine' : 'theirs') +
+      if (seenAlready) cell = '<button class="c go seen' + (mine && run.done ? ' mine' : '') +
         (shownPly() === j + 1 ? ' at' : '') + '" data-ply="' + (j + 1) + '">' + n.san + '</button>';
-      else if (j === run.ply) {
-        const shown = (run.phase === 'teach' && run.hint >= 1) ? n.san : '\u00b7 \u00b7 \u00b7';
-        cell = '<span class="c now">' + shown + '</span>';
-      } else cell = '<span class="c hid">' + n.san + '</span>';
+      else if (j === run.ply && run.badSan) cell = '<span class="c bad">' + run.badSan + '</span>';
+      else if (j === run.ply) cell = '<span class="c now">' +
+        ((run.phase === 'teach' && run.hint >= 1) ? n.san : '') + '</span>';
+      else cell = '<span class="c hid">' + n.san + '</span>';
       html += cell;
       if (col === 1) num++;
       col = 1 - col;
     });
-    if (col === 1) html += '<span class="c"></span>';
+    if (col === 1) html += '<span class="c pad"></span>';
     box.innerHTML = html;
     box.querySelectorAll('[data-ply]').forEach((b) => {
       b.onclick = () => review(+b.dataset.ply);
@@ -511,41 +530,62 @@
   function renderPanel() {
     $('#counter').textContent = ses.single ? 'single line'
       : 'line ' + Math.min(ses.qi + 1, ses.queue.length) + ' of ' + ses.queue.length;
-    $('#phase').textContent = run
-      ? (run.phase === 'teach' ? 'learning' : ses.mode === 'learn' ? 'from memory' : 'practice') : '';
 
-    const say = $('#say'), note = $('#note'), fb = $('#fb'), acts = $('#acts');
+    const say = $('#say'), note = $('#note'), fb = $('#fb'), acts = $('#acts'), ph = $('#phase');
     const node = run && run.ply < run.line.nodes.length ? run.line.nodes[run.ply] : null;
     const prev = run && run.ply > 0 ? run.line.nodes[run.ply - 1] : null;
     const comment = (node && node.comment) || (prev && prev.comment) || '';
+    const missed = !!(run && run.msgKind === 'err');
+    const cleared = !!(run && run.done && run.phase !== 'teach');
     note.hidden = !comment || !run || run.done;
     note.textContent = comment;
 
+    // state badge — learning / practising / mastered / try again
+    let badge = '', bcls = '';
+    if (run) {
+      if (missed) { badge = 'try again'; bcls = 'wrong'; }
+      else if (cleared) {
+        badge = lp(pk(run.line)).s >= target() ? 'mastered' : 'line cleared'; bcls = 'mastered';
+      } else if (run.phase === 'teach') badge = 'learning';
+      else if (isDue(lp(pk(run.line)))) { badge = 'review due'; bcls = 'due'; }
+      else badge = ses.mode === 'learn' ? 'from memory' : 'practising';
+    }
+    ph.textContent = badge;
+    ph.className = 'ph' + (bcls ? ' ' + bcls : '');
+
+    // prompt. Practice hides it behind a placeholder bar — same layout, no instruction.
+    let blank = false;
+    say.className = 'say';
     if (!run) say.textContent = '';
+    else if (missed) { say.className = 'say err'; say.textContent = 'Not that one \u2014 try again'; }
     else if (run.view != null) say.innerHTML = 'Looking back at move ' +
       Math.ceil(shownPly() / 2) + '. <span class="soft">Click the board to return.</span>';
     else if (run.done) say.textContent = run.phase === 'teach'
-      ? 'That is the full line.' : 'Line complete.';
+      ? 'That is the full line.'
+      : 'Line ' + (run.i + 1) + ' complete' + (ses.single ? '' : ' \u2014 next line');
     else if (run.lock) say.innerHTML = '<span class="soft">' +
       (userColor() === 'w' ? 'Black' : 'White') + ' replies\u2026</span>';
     else if (node) {
       if (run.phase === 'teach' || run.hint >= 2) say.textContent = describe(node.move, node.san);
-      else if (run.hint === 1) say.innerHTML = 'Your move as ' + (userColor() === 'w' ? 'White' : 'Black') +
-        '. <span class="soft">Move the highlighted piece.</span>';
-      else say.textContent = 'Your move as ' + (userColor() === 'w' ? 'White' : 'Black') + '.';
+      else if (run.hint === 1) say.textContent = 'Move the highlighted piece.';
+      else { say.className = 'say blank'; say.textContent = ''; blank = true; }
     }
 
-    fb.className = 'fb' + (run && run.msgKind ? ' ' + run.msgKind : '');
-    fb.innerHTML = run ? run.msg : '';
+    fb.className = 'fb' + (run && run.msg && run.msgKind ? ' ' + run.msgKind : blank ? ' soft' : '');
+    fb.innerHTML = run ? (run.msg || (blank ? 'no prompt \u2014 play the move from memory' : '')) : '';
 
     const btns = [];
     if (run && run.view != null) btns.push(['primary', 'Back to the position', () => review(run.ply)]);
     else if (run && run.done && run.phase === 'teach') btns.push(['primary', 'Play it from memory', () => startRun(run.i, 'recall', 0)]);
-    else if (run && run.done) btns.push(['primary', ses.single ? 'Back to lines' : 'Next line', () => (ses.single ? showLines() : nextLine())]);
-    else if (run && run.needRestart) btns.push(['primary', 'Run it again', () => startRun(run.i, 'recall', run.failures)]);
+    else if (run && run.done) {
+      btns.push(['primary', ses.single ? 'Back to lines' : 'Next line', () => (ses.single ? showLines() : nextLine())]);
+      btns.push(['', 'Replay', () => startRun(run.i, 'recall', 0)]);
+    } else if (run && run.needRestart) btns.push(['primary', 'Run it again', () => startRun(run.i, 'recall', run.failures)]);
     else if (run) {
-      btns.push(['', run.hint >= 2 ? 'Hint shown' : 'Hint', hint, run.phase === 'teach' || run.hint >= 2]);
-      btns.push(['', 'Restart line', () => startRun(run.i, run.phase, run.failures)]);
+      // after a miss the hint is the emphasised action, not the restart
+      btns.push([missed ? 'strong' : '', run.hint >= 2 ? 'Hint shown' : 'Hint', hint,
+        run.phase === 'teach' || run.hint >= 2]);
+      btns.push([missed ? '' : 'strong', 'Restart line', () => startRun(run.i, run.phase, run.failures)]);
     }
     if (run && !run.done && run.view == null) btns.push(['quiet', 'Skip', () => (ses.single ? showLines() : nextLine())]);
     acts.innerHTML = '';
@@ -555,24 +595,27 @@
       if (b[3]) el.disabled = true; else el.onclick = b[2];
       acts.appendChild(el);
     });
-    const url = lichessUrl();
-    if (url) {
-      const a = document.createElement('a');
-      a.className = 'btn quiet ext';
-      a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.title = 'Open this position on the Lichess analysis board';
-      a.innerHTML = 'Lichess <svg viewBox="0 0 24 24" aria-hidden="true">' +
-        '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/></svg>';
-      acts.appendChild(a);
-    }
+
+    const ext = $('#ext'), url = lichessUrl();
+    ext.innerHTML = url ? '<a href="' + url + '" target="_blank" rel="noopener noreferrer" ' +
+      'title="Open this position on the Lichess analysis board">Lichess <span>\u2197</span></a>' : '';
+
+    const keys = $('#keys');
+    keys.textContent = !run ? ''
+      : run.done && run.phase !== 'teach' ? 'enter \u00b7 next line\u00a0\u00a0\u00a0\u00a0r \u00b7 replay'
+      : run.done ? 'enter \u00b7 play it back\u00a0\u00a0\u00a0\u00a0r \u00b7 restart'
+      : 'enter \u00b7 continue\u00a0\u00a0\u00a0\u00a0h \u00b7 hint\u00a0\u00a0\u00a0\u00a0r \u00b7 restart';
 
     const pips = $('#pips');
     if (run) {
       const p = lp(pk(run.line)), t = target();
       let h = '';
       for (let k = 0; k < t; k++) h += '<span class="pip' + (k < p.s ? ' on' : '') + '"></span>';
-      pips.innerHTML = h + '<span style="margin-left:9px">' +
-        (p.s >= t ? 'mastered' : p.d ? 'clean runs ' + p.s + ' of ' + t : 'new line') + '</span>';
+      const label = run.failures
+        ? run.failures + (run.failures === 1 ? ' miss' : ' misses') + ' on this line'
+        : cleared ? 'played back with no prompts'
+        : p.s >= t ? 'mastered' : p.d ? 'clean runs ' + p.s + ' of ' + t : 'new line';
+      pips.innerHTML = '<span class="dots">' + h + '</span><span class="lbl">' + label + '</span>';
     } else pips.innerHTML = '';
   }
 
@@ -628,20 +671,26 @@
     const t = target();
     const rows = R.lines.map((l, i) => {
       const p = lp(pk(l));
-      const state = !p.d ? 'new' : isDue(p) ? 'due now' : p.s >= t ? 'mastered' : 'clean ' + p.s + '/' + t;
-      let pips = '';
-      for (let k = 0; k < t; k++) pips += '<span class="pip' + (k < p.s ? ' on' : '') + '"></span>';
-      return '<div class="lrow' + (p.s >= t ? ' mast' : '') + (isDue(p) ? ' due' : '') + '">' +
-        '<span class="n">' + (i + 1) + '</span>' +
-        '<span class="sans">' + sanWithNumbers(l) + '</span>' +
-        '<span class="miss">' + (p.f ? p.f + (p.f === 1 ? ' miss' : ' misses') : '') + '</span>' +
-        '<span class="pips" style="margin:0">' + pips + '</span><span class="st">' + state + '</span>' +
-        '<button class="btn" data-drill="' + i + '">Drill</button></div>';
+      const mastered = p.d && p.s >= t;
+      const due = isDue(p);
+      const dot = due ? 'due' : mastered ? 'mast' : p.d ? 'prog' : '';
+      const state = !p.d ? 'untouched' : due ? 'due now'
+        : mastered ? 'mastered' : 'in progress \u00b7 ' + p.s + '/' + t;
+      return '<button class="lrow" data-drill="' + i + '" title="Drill this line">' +
+        '<span class="col-n">' + (i + 1) + '</span>' +
+        '<span class="col-m">' + sanWithNumbers(l) + '</span>' +
+        '<span class="col-s' + (p.d ? '' : ' untouched') + '"><span class="dt ' + dot + '"></span>' +
+        '<span>' + state + (p.f ? ' \u00b7 ' + p.f + (p.f === 1 ? ' miss' : ' misses') : '') +
+        '</span></span>' +
+        '<span class="col-t">' + (p.t ? agoText(p.t) : '\u2014') + '</span></button>';
     }).join('');
-    $('#viewLines').innerHTML = '<div class="lede" style="margin-bottom:22px"><h1 style="font-size:27px">' +
-      esc(R.rep.name) + '</h1><p>' + R.lines.length + ' lines \u00b7 ' + R.positions + ' positions' +
-      (R.errors.length ? ' \u00b7 ' + R.errors.length + ' moves skipped' : '') + '</p></div>' +
-      '<div id="exportBox"></div><div class="lines">' + rows + '</div><div class="acts" style="margin-top:20px">' +
+    $('#viewLines').innerHTML = '<div id="exportBox"></div>' +
+      '<div class="table"><div class="thead"><span class="col-n">#</span>' +
+      '<span class="col-m">Moves</span><span class="col-s">Mastery</span>' +
+      '<span class="col-t">Last drilled</span></div>' + rows + '</div>' +
+      '<p class="foot">' + R.lines.length + ' lines \u00b7 ' + R.positions + ' positions' +
+      (R.errors.length ? ' \u00b7 ' + R.errors.length + ' moves skipped' : '') + '</p>' +
+      '<div class="acts" style="margin-top:22px">' +
       '<button class="btn" id="lnLearn">Learn new lines</button>' +
       '<button class="btn" id="lnPractice">Practice</button>' +
       '<button class="btn" id="lnExport">Export PGN</button>' +
@@ -804,31 +853,48 @@
           if (!e || !e.d) return;
           seen++; if (e.s >= target()) mastered++;
         });
-        return '<div class="rep"><span class="icon">' + pieceSvg(rep.color === 'w' ? 'K' : 'k') + '</span>' +
+        return '<div class="rep"><div class="head">' +
+          '<span class="icon">' + pieceSvg(rep.color === 'w' ? 'K' : 'k') + '</span>' +
           '<div class="grow"><div class="nm">' + esc(rep.name) + '</div><div class="sub">' +
-          lines.length + ' lines \u00b7 ' + mastered + ' mastered \u00b7 ' + seen + ' seen</div></div>' +
-          '<button class="btn primary" data-open="' + rep.id + '">Drill</button>' +
-          '<button class="btn quiet" data-del="' + rep.id + '">Delete</button></div>';
+          lines.length + ' lines \u00b7 ' + mastered + ' mastered \u00b7 ' + seen + ' seen</div></div></div>' +
+          '<div class="foot"><button class="btn primary" data-open="' + rep.id + '">Drill</button>' +
+          '<button class="btn quiet" data-del="' + rep.id + '">Delete</button></div></div>';
       }).join('') + '</div>';
     }
-    v.innerHTML = '<div class="lede"><h1>Drill your openings until the moves are automatic.</h1>' +
-      '<p>Every branch of a repertoire becomes a line you play move by move. A line only makes way ' +
-      'for the next one once you have played it back from memory with no prompts.</p></div>' +
-      presetCards() + reps +
+    const bare = !PRESETS.length && !db.reps.length;
+    const head = bare
+      ? '<div class="empty"><div class="deco"></div><h2>No repertoires yet</h2>' +
+        '<p>Import a PGN and every branch in it becomes a line you can drill.</p>' +
+        '<div class="acts"><button class="btn primary" id="emImport">Import a PGN</button></div>' +
+        '<p class="tail">or <button class="link" id="emSample">try a sample</button> ' +
+        'to see how a drill works</p></div>'
+      : '<div class="lede"><h1>Drill your openings until the moves are automatic.</h1>' +
+        '<p>Every branch of a repertoire becomes a line you play move by move. A line only makes way ' +
+        'for the next one once you have played it back from memory with no prompts.</p></div>';
+    v.innerHTML = head + presetCards() + reps +
       '<div class="form"><p class="sec">Your own PGN</p><h2>' +
       (db.reps.length ? 'Add another repertoire' : 'Load a repertoire') + '</h2>' +
       '<div class="row"><div class="field"><label for="fName">Name</label>' +
       '<input id="fName" type="text" placeholder="White \u2014 London System"></div>' +
-      '<div class="field" style="max-width:170px"><label for="fSide">You play</label>' +
+      '<div class="field narrow"><label for="fSide">You play</label>' +
       '<select id="fSide"><option value="w">White</option><option value="b">Black</option></select></div></div>' +
       '<div class="drop" id="drop"><button class="btn" id="fPick">Choose a PGN file</button>' +
-      '<div>or drop one here, paste below, or <button class="btn quiet" id="fSample" ' +
-      'style="padding:0 2px;text-decoration:underline">try a sample</button></div>' +
+      '<p class="line">or drop one here, paste below, or ' +
+      '<button class="link" id="fSample">try a sample</button></p>' +
       '<input type="file" id="fFile" accept=".pgn,.txt,text/plain" style="display:none"></div>' +
-      '<div class="field"><label for="fPgn">PGN</label><textarea id="fPgn" spellcheck="false" ' +
+      '<div class="field" style="margin-top:26px"><label for="fPgn">PGN</label>' +
+      '<textarea id="fPgn" spellcheck="false" ' +
       'placeholder="1. d4 Nf6 2. Bf4 e6 (2... g6 3. Nc3) 3. e3 ..."></textarea>' +
       '<p class="hint">A repertoire PGN with variations in brackets works directly. A collection of whole ' +
       'games gets turned into a repertoire tree.</p></div><div id="importState"></div></div>';
+    if (bare) {
+      $('#emImport').onclick = () => {
+        const ta = $('#fPgn');
+        if (ta.scrollIntoView) ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (ta.focus) ta.focus();
+      };
+      $('#emSample').onclick = () => { $('#fPgn').value = SAMPLE; setSource(SAMPLE, ''); };
+    }
 
     v.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => openPreset(b.dataset.preset); });
     v.querySelectorAll('[data-open]').forEach((b) => { b.onclick = () => openRep(b.dataset.open); });
